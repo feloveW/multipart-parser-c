@@ -1,4 +1,4 @@
-/* Based on node-formidable by Felix Geisendörfer 
+/* Based on node-formidable by Felix Geisendörfer
  * Igor Afonov - afonov@gmail.com - 2012
  * MIT License - http://www.opensource.org/licenses/mit-license.php
  */
@@ -9,15 +9,19 @@
 #include <stdarg.h>
 #include <string.h>
 
-static void multipart_log(const char * format, ...)
+static void multipart_log(const char* format, ...)
 {
 #ifdef DEBUG_MULTIPART
-    va_list args;
-    va_start(args, format);
+  va_list args;
+  va_start(args, format);
 
     fprintf(stderr, "[HTTP_MULTIPART_PARSER] %s:%d: ", __FILE__, __LINE__);
     vfprintf(stderr, format, args);
     fprintf(stderr, "\n");
+
+    va_end(args);
+#else
+  (void)format;
 #endif
 }
 
@@ -44,7 +48,7 @@ do {                                                                   \
 #define CR 13
 
 struct multipart_parser {
-  void * data;
+  void* data;
 
   size_t index;
   size_t boundary_length;
@@ -78,15 +82,18 @@ enum state {
 };
 
 multipart_parser* multipart_parser_init
-    (const char *boundary, const multipart_parser_settings* settings) {
+(const char* boundary, const multipart_parser_settings* settings) {
 
   multipart_parser* p = malloc(sizeof(multipart_parser) +
-                               strlen(boundary) +
-                               strlen(boundary) + 9);
+    strlen(boundary) +
+    strlen(boundary) + 9);
+  if (!p) {
+    return NULL;
+  }
 
   strcpy(p->multipart_boundary, boundary);
   p->boundary_length = strlen(boundary);
-  
+
   p->lookbehind = (p->multipart_boundary + p->boundary_length + 1);
 
   p->index = 0;
@@ -100,46 +107,69 @@ void multipart_parser_free(multipart_parser* p) {
   free(p);
 }
 
-void multipart_parser_set_data(multipart_parser *p, void *data) {
-    p->data = data;
+void multipart_parser_set_data(multipart_parser* p, void* data) {
+  p->data = data;
 }
 
-void *multipart_parser_get_data(multipart_parser *p) {
-    return p->data;
+void* multipart_parser_get_data(multipart_parser* p) {
+  return p->data;
 }
 
-size_t multipart_parser_execute(multipart_parser* p, const char *buf, size_t len) {
+
+#define BOUNDARY_NEXTLINE                                         \
+do {                                                              \
+    p->index = 0;                                                 \
+    NOTIFY_CB(part_data_begin);                                   \
+    p->state = s_header_field_start;                              \
+} while (0)                                                       \
+
+#define BOUNDARY_END                                         \
+do {                                                              \
+    p->state = s_part_data_boundary; \
+    i += 2; /* first '--' */    \
+    p->lookbehind[1] = LF;    \
+    p->index = 0;   \
+} while (0)                                                       \
+
+size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len) {
   size_t i = 0;
   size_t mark = 0;
   char c, cl;
   int is_last = 0;
 
-  while(i < len) {
+  while (i < len) {
     c = buf[i];
     is_last = (i == (len - 1));
     switch (p->state) {
-      case s_start:
-        multipart_log("s_start");
-        p->index = 0;
-        p->state = s_start_boundary;
+    case s_start:
+      multipart_log("s_start");
+      p->index = 0;
+      p->state = s_start_boundary;
 
       /* fallthrough */
       case s_start_boundary:
         multipart_log("s_start_boundary");
         if (p->index == p->boundary_length) {
+          //如果换行符只有LF
+          if (c == LF) {
+            BOUNDARY_NEXTLINE;
+            break;
+          }
           if (c != CR) {
             return i;
           }
           p->index++;
           break;
-        } else if (p->index == (p->boundary_length + 1)) {
+        }
+        else if (p->index == (p->boundary_length + 1)) {
           if (c != LF) {
             return i;
           }
-          p->index = 0;
-          NOTIFY_CB(part_data_begin);
-          p->state = s_header_field_start;
+          BOUNDARY_NEXTLINE;
           break;
+        }
+        if (i < 2) {
+          break; // first '--'
         }
         if (c != p->multipart_boundary[p->index]) {
           return i;
@@ -155,8 +185,19 @@ size_t multipart_parser_execute(multipart_parser* p, const char *buf, size_t len
       /* fallthrough */
       case s_header_field:
         multipart_log("s_header_field");
-        if (c == CR) {
+        if (c == CR || c == LF) {
           p->state = s_headers_almost_done;
+          if (c == LF)
+            p->state = s_part_data_start;
+          break;
+        }
+
+        if (c == ' ' || c == '\t') {
+          p->state = s_header_value_start;
+          break;
+        }
+
+        if (c == '-') {
           break;
         }
 
@@ -172,7 +213,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char *buf, size_t len
           return i;
         }
         if (is_last)
-            EMIT_DATA_CB(header_field, buf + mark, (i - mark) + 1);
+          EMIT_DATA_CB(header_field, buf + mark, (i - mark) + 1);
         break;
 
       case s_headers_almost_done:
@@ -186,7 +227,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char *buf, size_t len
 
       case s_header_value_start:
         multipart_log("s_header_value_start");
-        if (c == ' ') {
+        if (c == ' ' || c == '\t') {
           break;
         }
 
@@ -196,13 +237,15 @@ size_t multipart_parser_execute(multipart_parser* p, const char *buf, size_t len
       /* fallthrough */
       case s_header_value:
         multipart_log("s_header_value");
-        if (c == CR) {
+        if (c == CR || c == LF) {
           EMIT_DATA_CB(header_value, buf + mark, i - mark);
           p->state = s_header_value_almost_done;
+          if (c == LF)
+            p->state = s_header_field_start;
           break;
         }
         if (is_last)
-            EMIT_DATA_CB(header_value, buf + mark, (i - mark) + 1);
+          EMIT_DATA_CB(header_value, buf + mark, (i - mark) + 1);
         break;
 
       case s_header_value_almost_done:
@@ -222,28 +265,32 @@ size_t multipart_parser_execute(multipart_parser* p, const char *buf, size_t len
       /* fallthrough */
       case s_part_data:
         multipart_log("s_part_data");
-        if (c == CR) {
+        if (c == CR || c == LF) {
+          if (i >= len - p->boundary_length - 6) {
             EMIT_DATA_CB(part_data, buf + mark, i - mark);
             mark = i;
             p->state = s_part_data_almost_boundary;
             p->lookbehind[0] = CR;
+            if (c == LF) {
+              p->lookbehind[0] = LF;
+              BOUNDARY_END;
+            }
             break;
+          }
         }
         if (is_last)
-            EMIT_DATA_CB(part_data, buf + mark, (i - mark) + 1);
+          EMIT_DATA_CB(part_data, buf + mark, (i - mark) + 1);
         break;
 
       case s_part_data_almost_boundary:
         multipart_log("s_part_data_almost_boundary");
         if (c == LF) {
-            p->state = s_part_data_boundary;
-            p->lookbehind[1] = LF;
-            p->index = 0;
-            break;
+          BOUNDARY_END;
+          break;
         }
         EMIT_DATA_CB(part_data, p->lookbehind, 1);
         p->state = s_part_data;
-        mark = i --;
+        mark = i--;
         break;
 
       case s_part_data_boundary:
@@ -251,55 +298,59 @@ size_t multipart_parser_execute(multipart_parser* p, const char *buf, size_t len
         if (p->multipart_boundary[p->index] != c) {
           EMIT_DATA_CB(part_data, p->lookbehind, 2 + p->index);
           p->state = s_part_data;
-          mark = i --;
+          mark = i--;
           break;
         }
         p->lookbehind[2 + p->index] = c;
-        if ((++ p->index) == p->boundary_length) {
-            NOTIFY_CB(part_data_end);
-            p->state = s_part_data_almost_end;
+        if ((++p->index) == p->boundary_length) {
+          NOTIFY_CB(part_data_end);
+          p->state = s_part_data_almost_end;
         }
         break;
 
       case s_part_data_almost_end:
         multipart_log("s_part_data_almost_end");
         if (c == '-') {
-            p->state = s_part_data_final_hyphen;
-            break;
+          p->state = s_part_data_final_hyphen;
+          break;
         }
-        if (c == CR) {
-            p->state = s_part_data_end;
-            break;
+        if (c == CR || c == LF) {
+          p->state = s_part_data_end;
+          if (c == LF) {
+            p->state = s_header_field_start;
+            NOTIFY_CB(part_data_begin);
+          }
+          break;
         }
         return i;
-   
+
       case s_part_data_final_hyphen:
         multipart_log("s_part_data_final_hyphen");
         if (c == '-') {
-            NOTIFY_CB(body_end);
-            p->state = s_end;
-            break;
+          NOTIFY_CB(body_end);
+          p->state = s_end;
+          break;
         }
         return i;
 
       case s_part_data_end:
         multipart_log("s_part_data_end");
         if (c == LF) {
-            p->state = s_header_field_start;
-            NOTIFY_CB(part_data_begin);
-            break;
+          p->state = s_header_field_start;
+          NOTIFY_CB(part_data_begin);
+          break;
         }
         return i;
 
       case s_end:
-        multipart_log("s_end: %02X", (int) c);
+        multipart_log("s_end: %02X", (int)c);
         break;
 
       default:
         multipart_log("Multipart parser unrecoverable error");
         return 0;
     }
-    ++ i;
+    ++i;
   }
 
   return len;
