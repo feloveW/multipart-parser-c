@@ -115,33 +115,25 @@ void* multipart_parser_get_data(multipart_parser* p) {
   return p->data;
 }
 
-
-#define BOUNDARY_NEXTLINE                                         \
-do {                                                              \
-    p->index = 0;                                                 \
-    NOTIFY_CB(part_data_begin);                                   \
-    p->state = s_header_field_start;                              \
-} while (0)                                                       \
-
-#define BOUNDARY_END                                         \
-do {                                                              \
-    p->state = s_part_data_boundary; \
-    i += 2; /* first '--' */    \
-    p->lookbehind[1] = LF;    \
-    p->index = 0;   \
-} while (0)                                                       \
-
 size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len) {
   size_t i = 0;
   size_t mark = 0;
   char c, cl;
   int is_last = 0;
+  //消息体开头出现的回车换行字符长度
+  size_t skip_begin_CRLF_len = 0;
 
   while (i < len) {
     c = buf[i];
     is_last = (i == (len - 1));
     switch (p->state) {
     case s_start:
+      //情况：消息体开始就是换行
+      if (c == CR || c == LF)
+      {
+        skip_begin_CRLF_len++;
+        break;
+      }
       multipart_log("s_start");
       p->index = 0;
       p->state = s_start_boundary;
@@ -150,11 +142,6 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
       case s_start_boundary:
         multipart_log("s_start_boundary");
         if (p->index == p->boundary_length) {
-          //如果换行符只有LF
-          if (c == LF) {
-            BOUNDARY_NEXTLINE;
-            break;
-          }
           if (c != CR) {
             return i;
           }
@@ -165,11 +152,13 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
           if (c != LF) {
             return i;
           }
-          BOUNDARY_NEXTLINE;
+          p->index = 0;
+          NOTIFY_CB(part_data_begin);
+          p->state = s_header_field_start;
           break;
         }
-        if (i < 2) {
-          break; // first '--'
+        if (i < 2 + skip_begin_CRLF_len) {
+          break; // first '--' + 开头的回车换行长度
         }
         if (c != p->multipart_boundary[p->index]) {
           return i;
@@ -185,10 +174,8 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
       /* fallthrough */
       case s_header_field:
         multipart_log("s_header_field");
-        if (c == CR || c == LF) {
+        if (c == CR) {
           p->state = s_headers_almost_done;
-          if (c == LF)
-            p->state = s_part_data_start;
           break;
         }
 
@@ -237,11 +224,9 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
       /* fallthrough */
       case s_header_value:
         multipart_log("s_header_value");
-        if (c == CR || c == LF) {
+        if (c == CR) {
           EMIT_DATA_CB(header_value, buf + mark, i - mark);
           p->state = s_header_value_almost_done;
-          if (c == LF)
-            p->state = s_header_field_start;
           break;
         }
         if (is_last)
@@ -265,18 +250,13 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
       /* fallthrough */
       case s_part_data:
         multipart_log("s_part_data");
-        if (c == CR || c == LF) {
-          if (i >= len - p->boundary_length - 6) {
-            EMIT_DATA_CB(part_data, buf + mark, i - mark);
-            mark = i;
-            p->state = s_part_data_almost_boundary;
-            p->lookbehind[0] = CR;
-            if (c == LF) {
-              p->lookbehind[0] = LF;
-              BOUNDARY_END;
-            }
-            break;
-          }
+        // fix: 左边应该是已经解析的字符串长度i+1，加上后续的LF字符
+        if (c == CR && (i + 2) >= len - p->boundary_length - 6) {
+          EMIT_DATA_CB(part_data, buf + mark, i - mark);
+          mark = i;
+          p->state = s_part_data_almost_boundary;
+          p->lookbehind[0] = CR;
+          break;
         }
         if (is_last)
           EMIT_DATA_CB(part_data, buf + mark, (i - mark) + 1);
@@ -285,7 +265,10 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
       case s_part_data_almost_boundary:
         multipart_log("s_part_data_almost_boundary");
         if (c == LF) {
-          BOUNDARY_END;
+          p->state = s_part_data_boundary;
+          i += 2; // first '--'
+          p->lookbehind[1] = LF;
+          p->index = 0;
           break;
         }
         EMIT_DATA_CB(part_data, p->lookbehind, 1);
@@ -314,12 +297,8 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
           p->state = s_part_data_final_hyphen;
           break;
         }
-        if (c == CR || c == LF) {
+        if (c == CR) {
           p->state = s_part_data_end;
-          if (c == LF) {
-            p->state = s_header_field_start;
-            NOTIFY_CB(part_data_begin);
-          }
           break;
         }
         return i;
@@ -337,7 +316,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
         multipart_log("s_part_data_end");
         if (c == LF) {
           p->state = s_header_field_start;
-          NOTIFY_CB(part_data_begin);
+          NOTIFY_CB(part_data_end);
           break;
         }
         return i;
