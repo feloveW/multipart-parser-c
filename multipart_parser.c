@@ -120,7 +120,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
   size_t mark = 0;
   char c, cl;
   int is_last = 0;
-  //消息体开头出现的回车换行字符长度
+  /*消息体开头出现的回车换行字符长度*/
   size_t skip_begin_CRLF_len = 0;
 
   while (i < len) {
@@ -128,7 +128,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
     is_last = (i == (len - 1));
     switch (p->state) {
     case s_start:
-      //情况：消息体开始就是换行
+      /*情况：消息体开始就是换行*/
       if (c == CR || c == LF)
       {
         skip_begin_CRLF_len++;
@@ -158,7 +158,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
           break;
         }
         if (i < 2 + skip_begin_CRLF_len) {
-          break; // first '--' + 开头的回车换行长度
+          break; /* first '--' + 开头的回车换行长度*/
         }
         if (c != p->multipart_boundary[p->index]) {
           return i;
@@ -250,7 +250,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
       /* fallthrough */
       case s_part_data:
         multipart_log("s_part_data");
-        // fix: 左边应该是已经解析的字符串长度i+1，加上后续的LF字符
+        /* fix: 左边应该是已经解析的字符串长度i+1，加上后续的LF字符*/
         if (c == CR && (i + 2) >= len - p->boundary_length - 6) {
           EMIT_DATA_CB(part_data, buf + mark, i - mark);
           mark = i;
@@ -266,7 +266,7 @@ size_t multipart_parser_execute(multipart_parser* p, const char* buf, size_t len
         multipart_log("s_part_data_almost_boundary");
         if (c == LF) {
           p->state = s_part_data_boundary;
-          i += 2; // first '--'
+          i += 2; /* first '--'*/
           p->lookbehind[1] = LF;
           p->index = 0;
           break;

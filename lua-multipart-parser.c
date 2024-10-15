@@ -14,25 +14,25 @@
 }
 */
 
-// 新的表单数据开始
+/* 新的表单数据开始*/
 int on_part_data_begin(multipart_parser* p)
 {
 	lua_State* L = multipart_parser_get_data(p);
-	// part_data数组序号
+	/* part_data数组序号*/
 	int len = lua_rawlen(L, -1);
 	lua_pushinteger(L, len + 1);
-	//创建part data表
+	/*创建part data表*/
 	lua_createtable(L, 0, 2);
-	// headers数组
+	/* headers数组*/
 	lua_createtable(L, 0, 0);
 	return 0;
 }
 
 int read_header_name(multipart_parser* p, const char* at, size_t length)
 {
-	//printf(">>%.*s: ", (int)length, at);
+	/*printf(">>%.*s: ", (int)length, at);*/
 	lua_State* L = multipart_parser_get_data(p);
-	// 获取headers数组长度
+	/* 获取headers数组长度*/
 	int len = lua_rawlen(L, -1);
 	lua_pushinteger(L, len + 1);
 	lua_createtable(L, 0, 2);
@@ -47,8 +47,10 @@ int read_header_value(multipart_parser* p, const char* at, size_t length)
 	lua_pushlstring(L, at, length);
 	lua_setfield(L, -2, "value");
 	lua_settable(L, -3);
-	//printf("%.*s\n", (int)length, at);
-	//printf("------------------------------\n");
+	/*
+	printf("%.*s\n", (int)length, at);
+	printf("------------------------------\n");
+	*/
 	return 0;
 }
 
@@ -64,8 +66,10 @@ int read_part_data(multipart_parser* p, const char* at, size_t length)
 	lua_State* L = multipart_parser_get_data(p);
 	lua_pushlstring(L, at, length);
 	lua_setfield(L, -2, "data");
-	//printf(">>%.*s\n", (int)length, at);
-	//printf("------------------------------\n");
+	/*
+	printf(">>%.*s\n", (int)length, at);
+	printf("------------------------------\n");
+	*/
 	return 0;
 }
 
